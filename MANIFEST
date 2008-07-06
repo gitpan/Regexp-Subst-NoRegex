@@ -1,0 +1,7 @@
+Changes
+Makefile.PL
+MANIFEST
+README
+t/Regexp-Subst-NoRegex.t
+lib/Regexp/Subst/NoRegex.pm
+META.yml                                 Module meta-data (added by MakeMaker)

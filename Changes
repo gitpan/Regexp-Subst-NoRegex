@@ -1,0 +1,6 @@
+Revision history for Perl extension Regexp::Subst::NoRegex.
+
+0.01  Sun Jul  6 18:08:44 2008
+	- original version; created by h2xs 1.23 with options
+		-X -b 5.8.0 -n Regexp::Subst::NoRegex
+
