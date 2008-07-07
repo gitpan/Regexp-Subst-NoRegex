@@ -4,3 +4,11 @@ Revision history for Perl extension Regexp::Subst::NoRegex.
 	- original version; created by h2xs 1.23 with options
 		-X -b 5.8.0 -n Regexp::Subst::NoRegex
 
+0.02  Mon Jul  7          2008
+
+      Bugs fixed. Drastic simplification of "rnr_substr" algorithm,
+      with many steps removed. "rnr_sop" algorithm about 50% rewritten
+      to overcome many bugs found during real-world testing using
+      Microsoft Word. Total number of tests doubled, each test
+      representing another bug. It may even work correctly now.
+

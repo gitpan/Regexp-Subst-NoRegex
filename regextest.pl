@@ -1,18 +1,35 @@
-# Before `make install' is performed this script should be runnable with
-# `make test'. After `make install' it should work as `perl Regexp-Subst-NoRegex.t'
+#!/usr/local/bin/perl
+use warnings;
+use strict;
 
-#########################
-
-# change 'tests => 1' to 'tests => last_test_to_print';
-
-use Test::More tests => 23;
-
-BEGIN { use_ok('Regexp::Subst::NoRegex') };
-
+use lib './blib/lib';
 
 use Regexp::Subst::NoRegex qw/rnr_substr rnr_sop/;
 
-my $verbose = 0;
+$Regexp::Subst::NoRegex::verbose = 0;
+
+# Global substitution callback
+
+sub ob
+{
+#    print "OB @_\n";
+}
+
+# One-by-one substitution callback
+
+sub nc
+{
+    my ($data, $left, $right, $orig, $gb_list) = @_;
+
+#    print "NC $data, $left, $right, $orig, (",join (", ",@{$gb_list}),")\n";
+}
+
+my %subsop;
+$subsop{global} = \&ob;
+$subsop{single} = \&nc;
+$subsop{data} = "databag";
+
+my $verbose =  0;
 my $count = 0;
 sub test_dumb_subs
 {
@@ -20,19 +37,21 @@ sub test_dumb_subs
     # Copy done by Perl using eval.
     my $copy_ok = $text;
     eval ("\$copy_ok =~ s/$left/$right/g");
+    print "Expected result is\n$copy_ok\n" if $verbose;
     # Copies made using dumb substitutions
     my $copy1 = rnr_substr ($text, $left, $right);
-    my $copy2 = rnr_sop ($text, $left, $right);
-     print "copy1:\n$copy1" if $verbose;
-     print "copy2:\n$copy2" if $verbose;
-     print "copy_ok:\n$copy_ok" if $verbose;
+    my $copy2 = rnr_sop ($text, $left, $right, \%subsop);
+     print "copy1:\n$copy1\n" if $verbose;
+     print "copy2:\n$copy2\n" if $verbose;
     $count++;
-    print "$count:\n";
-    print "1 ", $copy1 eq $copy_ok ? "OK" : "fail", "\n";
-    print "2 ", $copy2 eq $copy_ok ? "OK" : "fail", "\n";
-    ok ($copy1 eq $copy_ok);
-    ok ($copy2 eq $copy_ok);
+    print "$count: ";
+    print " rnr_substr ", $copy1 eq $copy_ok ? "OK  " : "fail";
+    print " rnr_sop: ", $copy2 eq $copy_ok ? "OK  " : "fail";
+    print "\n";
+#    ok ($copy1 eq $copy_ok);
+#    ok ($copy2 eq $copy_ok);
 }
+
 my @dotests = (1..11);
 my %dotests;
 @dotests{@dotests} = (1)x@dotests;

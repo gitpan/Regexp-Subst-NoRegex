@@ -11,7 +11,7 @@ our @ISA = qw(Exporter);
 
 our @EXPORT_OK = qw(rnr_substr rnr_sop);
 
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 
 =head1 NAME
 
@@ -27,8 +27,6 @@ Regexp::Subst::NoRegex - emulate s/// using s/\Q// or substr
   my $copy2 = rnr_sop ($text, '\bj(.)(.)', '$2 $1');
   if ($copy eq $copy2 && $copy eq $copy1) {
       print "OK\n";
-  } else {
-      print "Oh no, more bugs.\n";
   }
 
 =head1 DESCRIPTION
@@ -52,7 +50,7 @@ on request.
 
 Set
 
-  $Regexp::Subst::Substr::verbose = 1;
+  $Regexp::Subst::NoRegex::verbose = 1;
 
 to see what the module is doing.
 
@@ -81,7 +79,17 @@ sub make_regex_matches
 	push @matches, [$&, $p - $l, $p];
 	$hits{$&}{$p - $l} = $p;
     }
-    return (\@matches, \%hits);
+    my %locs;
+    for my $k (keys %hits) {
+	my @ls = keys %{$hits{$k}};
+	@locs{@ls} = ($k) x @ls;
+    }
+    # For debugging purposes, make a list ordered by position as well.
+    my @loc_list = sort {$a<=>$b} keys %locs;
+    for (@loc_list) {
+	print "$_: $locs{$_}\n" if $verbose;
+    }
+    return (\@matches, \%hits, \@loc_list);
 }
 
 # Internal routine.
@@ -96,10 +104,9 @@ sub make_regex_matches
 sub make_dumb_rights
 {
     my ($text, $left, $right) = @_;
-#    print "Values are '$text' '$left' right = '$right'\n";
     my %results;
-    # The mother of all evaluations. The regex contains an evaluation,
-    # and it itself is evaluated.
+    # The substitution contains an evaluation, and it itself is
+    # evaluated.
     my $toeval = "\$text =~ s/$left/\$results{\$&} = \"$right\";\"$right\"/ge";
     print "Sending '$toeval' to eval\n" if $verbose;
     eval ($toeval);
@@ -108,63 +115,6 @@ sub make_dumb_rights
 	print "LHS: '$_' RHS: '$results{$_}'\n" if $verbose;
     }
     return \%results;
-}
-
-# Internal routine.
-
-# Make a list of [start, end] positions where the non-regex string
-# $left is found in $text.
-
-sub make_matches
-{
-    my ($text, $left) = @_;
-    my @matches;
-    while ($text =~ m/\Q$left/g) {
-	my $p = pos $text;
-	print $&, " ", $p - length ($&), " ", $p, "\n" if $verbose;
-	push @matches, [$p - length ($&), $p];
-    }
-    return \@matches;
-}
-
-# Internal routine.
-
-# Get a list of whether, for each position that the non-regex LHS of
-# the substitution matches, a global substitution of the non-regex LHS
-# is correct (matches the regex substitution) or incorrect (a false
-# hit which the regex doesn't match). The list is a hash indexed by
-# the location of the hit, with the string "good" or "bad" to indicate
-# status.
-
-# The second result reports if all the hits are good or not. If all
-# the hits are good, then we don't need this list anyway, since a
-# blanket substitution will be satisfactory.
-
-sub good_bad
-{
-    my ($text, $left, $right) = @_;
-    my ($left_matches, $hits) = make_regex_matches ($text, $left);
-    my %good_bad;
-    for (keys %{$hits}) {
-	my @good_bad;
-	# True if all the hits are good.
-	my $all_good = 1;
-	print "All matches for '$_': " if $verbose;
-	my $all_matches = make_matches ($text, $_);
-	for my $match (@{$all_matches}) {
-	    my $offset = $$match[0];
-	    print "Match '$offset':" if $verbose;
-	    if ($$hits{$_}{$offset}) {
-		push @good_bad, 'good';
-	    } else {
-		$all_good = 0;
-		push @good_bad, 'bad';
-	    }
-	    print $good_bad[-1],"\n" if $verbose;
-	}
-	$good_bad{$_} = $all_good ? 'all' : \@good_bad ;
-    }
-    return \%good_bad;
 }
 
 =head2 rnr_substr
@@ -201,79 +151,82 @@ Any RHS expression, including things like C<$1>, C<$2>, etc.
 
 sub rnr_substr
 {
+    $verbose = 0;
     my ($text, $left, $right) = @_;
-    my $good_bad = good_bad (@_);
+    my ($matches) = make_regex_matches ($text, $left);
     my %markedforsubs;
     my $rhsides = make_dumb_rights($text, $left, $right);
-    for my $dumb_left (keys %{$good_bad}) {
-	print "\$dumb_left is '$dumb_left'\n" if $verbose;
-	# Make the thing to substitute for
-	my $dumb_right = $rhsides->{$dumb_left};
-	print "\$dumb_right is '$dumb_right'\n" if $verbose;
-	my $gb_list = $$good_bad{$dumb_left};
-	if (ref ($gb_list) eq 'ARRAY') {
-	    print "$dumb_left: ",join (" ",@$gb_list),"\n" if $verbose;
-	} else {
-	    print "$dumb_left: all good\n" if $verbose;
-	}
-	my $count = 0;
-	while ($text =~ /$dumb_left/g) {
-	    print "Match at ",pos($text),": '",
-		substr($text,pos($text) - length($dumb_left),10),"'\n" 
-		    if $verbose;
-	    $count++;
-	    print "$count/" if $verbose;
-	    if ($gb_list ne 'all') {
-		my $gb = shift @{$gb_list};
-		if (!$gb) {
-		    print "Error: bad number of good/bad items.\n";
-		}
-		next if ($gb eq 'bad');
-	    }
-	    print "Marking ",pos($text)," as good.\n" if $verbose;
-	    push @{$markedforsubs{$dumb_left}}, [pos($text),$dumb_right];
-	}
-    }
-    my %subs_list;
-    for my $dumb_left (keys %{$good_bad}) {
-	for (@{$markedforsubs{$dumb_left}}) {
-	    my ($end, $dumb_right) = @{$_};
-	    my $start = $end - length ($dumb_left);
-	    $subs_list{$start} = [$end, $dumb_left, $dumb_right];
-	}
-    }
     my $offset = 0;
-    for my $start ( sort {$a <=> $b} keys %subs_list) {
-	my ($end, $dumb_left, $dumb_right) = @{$subs_list{$start}};
-	my $l = length ($dumb_left);
-	my $r = length ($dumb_right);
-	substr ($text, $start + $offset, $l, $dumb_right);
-#	print $text;
-	$offset += ($r - $l);
+    for my $match (@$matches) {
+	my ($lhs, $start, $end) = @$match;
+	my $rhs = $rhsides->{$lhs};
+	my $len = $end - $start;
+	print "subsing '$lhs' for '$rhs' at $start, length $len\n" if $verbose;
+	substr ($text, $start + $offset, $len) = $rhs;
+	$offset += length($rhs) - $len;
+	if ($start + $offset < 0 || $offset + $start > length ($text)) {
+	    die "Internal error: impossible string offset $offset substituting $lhs for $rhs at position $start of string '$text'";
+	}
     }
+    $verbose = 0;
 
     return $text;
 }
 
 # Internal routine.
 
-# like make_matches above, but does a substitution into a copy of the
-# text, since this is for the s/\Q// (sop) version.
+# Find characters which are not being used in the text.
+
+sub find_unused_chars
+{
+    my ($text) = @_;
+    my @unused;
+    my %chrsused;
+    for (split '', $text) {
+	$chrsused{ord($_)}++;
+    }
+#     for (sort keys %chrsused) {
+# 	print "$_: $chrsused{$_}, ";
+#     }
+#    print "\n";
+    # Try ASCII printables first
+    for (0x21..0x7E) {
+	if (!$chrsused{$_}) {
+	    print "found unused character ",chr($_)," (ASCII $_)\n" if $verbose;
+	    push @unused, chr($_);
+	}
+    }
+    if (@unused< 2) {
+	print "Too many printable ASCII characters in use." if $verbose;
+	for (0x80..0xFF) {
+	    if (!$chrsused{$_}) {
+		print "found unused character ",chr($_),"(non-ASCII $_)\n" if $verbose;
+		push @unused, chr($_);
+	    }
+	}
+    }
+    if (@unused< 2) {
+	die "Too many characters in use in this text. This routine needs at least two characters to not be used.";
+    }
+    return @unused;
+}
+
+# Internal routine.
 
 sub make_matches2
 {
-    my ($text, $left) = @_;
+    $verbose = 0;
+    my ($text, $left, $unusedchar) = @_;
     print "looking for matches for non-regex '$left' in \n$$text\n" if $verbose;
+    print "012345678901234567890123456789012345678901234567890\n" if $verbose;
     my @matches;
-    my $jibberjabber = join ('', map { '*' } split '', $left);
-    print "jibberjabber = '$jibberjabber'\n" if $verbose;
+    my $p = 0;
     while ($$text =~ /\Q$left/g) {
-	my $p = pos $$text;
-	print "'", $&, "' ", $p - length ($&), " ", $p, "\n" if $verbose;
-	push @matches, [$p - length ($&), $p];
-	$$text =~ s/\Q$left/$jibberjabber/;
+ 	my $p = pos $$text;
+ 	print "'", $&, "' ", $p - length ($&), " ", $p, "\n" if $verbose;
+ 	push @matches, $p - length ($&);#, $p];
     }
-    print "text is '$$text'\n" if $verbose;
+    $verbose = 0;
     return \@matches;
 }
 
@@ -283,31 +236,116 @@ sub make_matches2
 # into a copy of the text in the order of length of the items, since
 # this is for the s/\Q// (sop) version.
 
-sub good_bad2
+sub good_bad
 {
-    my ($text, $left, $right) = @_;
-    my ($left_matches, $hits) = make_regex_matches ($text, $left);
+    my ($text, $left, $right, $unusedchar) = @_;
+    my ($left_matches, $hits) = make_regex_matches ($text, $left, $unusedchar);
     my %good_bad;
-    for (sort { length ($b) <=> length ($a) } keys %{$hits}) {
+    my @keyz = sort { length ($b) <=> length ($a) } keys %{$hits};
+    for (@keyz) {
 	my @good_bad;
 	# True if all the hits are good.
 	my $all_good = 1;
 	print "All matches for '$_': \n" if $verbose;
-	my $all_matches = make_matches2 (\$text, $_);
+	my $all_matches = make_matches2 (\$text, $_, $unusedchar);
+	print "There are ",scalar(@{$all_matches})," all_matches\n" if $verbose;
 	for my $match (@{$all_matches}) {
-	    my $offset = $$match[0];
+	    my $offset = $match;
 	    print "Match '$offset':" if $verbose;
 	    if ($$hits{$_}{$offset}) {
+		print "Hit for $_ at $offset\n" if $verbose;
 		push @good_bad, 'good';
 	    } else {
+		print "Miss for $_ at $offset\n" if $verbose;
 		$all_good = 0;
 		push @good_bad, 'bad';
 	    }
 	    print $good_bad[-1],"\n" if $verbose;
 	}
 	$good_bad{$_} = $all_good ? 'all' : \@good_bad ;
+	# Substitute out the good matches
+	my $jibberjabber = $unusedchar x length ($_);
+	print "jibberjabber = '$jibberjabber'\n" if $verbose;
+	if ($all_good) {
+	    $text =~ s/\Q$_/$jibberjabber/g;
+	} else {
+	    my $p = 0;
+	    for my $i (0..$#good_bad) {
+		$p = @{$all_matches}[$i];
+		if ($good_bad[$i] eq 'good') {
+		    substr ($text, $p, length($_), $jibberjabber);
+		} elsif ($good_bad[$i] eq 'bad') {
+		    # skip
+		} else {
+		    print "Problem in size of \@good_bad\n";
+		}
+		$p++;
+	    }
+	}
+	print "\$text is now\n$text\n" if $verbose;
     }
-    return \%good_bad;
+    return (\%good_bad, \@keyz);
+}
+
+# Substitute s/// away the identifier $left either into $right, if it
+# is a good match, or $orig, the string which the identifier replaced,
+# if it is a bad match.
+
+sub sop_good_bad
+{
+    $verbose = 0;
+    my ($text, $left, $right, $sep, $gb_list) = @_;
+    my @gbs = @{$gb_list};
+    print "There are ",scalar(@gbs)," good/bad matches\n" if $verbose;
+    print "Not all good: doing one at a time\n" if $verbose;
+    my $nsubs = $$text =~ s/\Q$left/$sep/g;
+    if ($nsubs != @gbs) {
+	die "Internal error: mismatch of good / bad list & number of substitutions.";
+    }
+    print "Made $nsubs substitutions\n" if $verbose;
+    while ($$text =~ /\Q$sep/) {
+#	print "$`\[$&\]$'\n";
+	my $gb = shift @gbs;
+	if (!$gb) {
+	    die "Internal error: mismatch of good/bad and subs strings while looking for '$sep'.";
+	}
+	if ($gb eq 'good') {
+	    print "Saw a good one\n" if $verbose;
+	    $$text =~ s/\Q$sep/$right/ or 
+		die "Internal error: single substitution of '$left' with '$right' failed.\n";
+	} elsif ($gb eq 'bad') {
+	    print "Rejected a bad one\n" if $verbose;
+	    $$text =~ s/\Q$sep/$left/ or 
+		die "Internal error: single substitution of '$left' with '$right' failed.\n";
+	} else {
+	    die "Internal error: invalid value in good/bad array";
+	}
+    }
+    $verbose = 0;
+}
+
+# Make a unique separator which only has characters which don't get
+# re-substituted - a big problem in previous versions of the code.
+
+# At the moment, this makes a separator either of the form x23x, where
+# 23 is the number, or of the form xyyyx, where x and y are two
+# characters unused in $text, as computed by find_unused_chars
+# above. The second option is for the case where there is a
+# substitution consisting of digits only.
+
+sub make_sep 
+{
+    my ($unusedchar, $n, $usedigits) = @_;
+    my $sep;
+    if ($usedigits) {
+	$sep = $unusedchar->[0].$n.$unusedchar->[0];
+    } else {
+	if (!$unusedchar->[1]) {
+	    die "Don't have enough unused characters.";
+	}
+	$sep = $unusedchar->[0].$unusedchar->[1] x ($n+1).$unusedchar->[0];
+    }
+    return $sep;
 }
 
 =head2 rnr_sop
@@ -323,7 +361,37 @@ with the subsitution operator (s///) with regexes switched off.
 
 =over
 
-=item rnr_sop ($L<text>, $L<left>, $L<right>);
+=item rnr_sop ($L<text>, $L<left>, $L<right>, $L<subsop>);
+
+=item subsop
+
+This is a hash reference containing
+
+=over 2
+
+=item $subsop{global}
+
+callback routine for global substitutions
+
+Takes arguments ($data, $left, $right) where $left should be globally
+substituted for $right, and $data is the data from $subsop{data}.
+
+=item $subsop{single}
+
+callback routine for sequential substitutions
+
+Takes arguments ($data, $left, $right, $orig, $gb_list);
+
+where $gb_list is a list of good or bad substitutions in the form
+('good', 'bad', 'bad', 'good', 'good'), and $left should be
+substituted with either $right or $orig depending on whether $gb_list
+says "good" or "bad". $data is $subsop{data}.
+
+=back
+
+=item $subsop{data}
+
+data to send to the callback routines.
 
 =back
 
@@ -331,74 +399,54 @@ with the subsitution operator (s///) with regexes switched off.
 
 sub rnr_sop
 {
-    my ($text, $left, $right) = @_;
+    my ($text, $left, $right, $subsop) = @_;
     my $text2 = $text;
-    my $good_bad = good_bad (@_);
     my $rhsides = make_dumb_rights($text, $left, $right);
-    print "regex_no_regex: attempting\n$text2\n=~ /$left/$right/g;\n" if $verbose;
-
-    $good_bad = good_bad2 ($text2, $left, $right);
-    # Make some identifier for the first substitution pass. I try five
-    # different unlikely strings to find something which is definitely
-    # not in the original text. Hopefully there are not many documents
-    # with all of these things in them.
-    my @unlikely = qw/951843 674321 981753 super xyzac/;
-    my $separator;
-    do {
-	$separator = pop @unlikely;
-	die "Ran out of separators" if !$separator;
-    } while ($text2 =~ /\Q$separator/);
-    print "Separator is $separator\n" if $verbose;
+    print "rnr_sop: attempting\n$text2\n=~ /$left/$right/g;\n" if $verbose;
+    my @unusedchars = find_unused_chars ($text);
+    my ($good_bad, $keyz) = good_bad ($text2, $left, $right, $unusedchars[0]);
     # First pass substitution - globally substitute all the left hand
     # sides with some identifier.
 
-    # Sort the substition keys into length order (longest first) to
-    # prevent shorter matches from overriding longer matches. This has
-    # to match the behaviour in good_bad2 above.
-    my @subkeys = sort { length ($b) <=> length ($a) } keys %{$good_bad};
-    # Make an ID.
-
-    # Note on use of sprintf: A weird bug happened when I didn't use
-    # sprintf but just tagged the number on, and when the number of
-    # substitutions became more than ten, then $separator_11 was being
-    # substituted by the right hand side for $separator_1. Aargh!
-    # Hence the sprintf.
-    for (0..$#subkeys) {
-	my $sep = $separator . sprintf ("_%05d", $_);
-	$text2 =~ s/\Q$subkeys[$_]/$sep/g;
-    }
+    # Make sure we use the same list of keys as in good_bad, or
+    # mystery bugs will happen.
+    my @subkeys = @{$keyz};
+    my $usedigits = 1;
+    for (@subkeys) { $usedigits = 0 if /^\d+$/ }
     print "Text is in substitution limbo as $text2\n" if $verbose;
-    # Second pass substitution - substitute the identifiers with the
-    # right hand sides. We may have to substitute the identifier with
-    # its left hand side if it was a mistake.
+    # First pass substitution - substitute valid identifiers with the
+    # right hand sides.
     for (0..$#subkeys) {
 	my $lhs = $subkeys[$_];
-	my $rhs = $rhsides->{$lhs};
-	print "trying subs of '$lhs' with '$rhs'\n" if $verbose;
-	my $sep = $separator . sprintf ("_%05d", $_);
+	my $sep1 = make_sep (\@unusedchars, (2*($_+1)), $usedigits);
+	my $sep2 = make_sep (\@unusedchars, (2*($_+1)+1), $usedigits);
 	my $gb_list = ${$good_bad}{$lhs};
 	# Do a global replacement if all of the replacements are OK.
 	if (ref ($gb_list) ne 'ARRAY') {
-	    print "All good: going global\n" if $verbose;
-	    $text2 =~ s/$sep/$rhs/g;
+	    if ($text2 !~ s/\Q$lhs/$sep2/g) {
+		die "Substitution failed";
+	    }
+	    print "s/\\Q$lhs/$sep2/g gives\n" if $verbose;
+	    print "$text2\n" if $verbose;
+	    if ($subsop && $subsop->{global}) {
+		&{$subsop->{global}}($subsop->{data}, $lhs, $sep2)
+	    }
 	} else {
 	    # Don't do global substitution, do them one at a time.
-	    print "Not all good: doing one at a time\n" if $verbose;
-	    while ($text2 =~ /$sep/) {
-		my $gb = shift @{$gb_list};
-		if (!$gb) {
-		    die "Internal error: mismatch of good/bad and subs strings.";
-		}
-		if ($gb eq 'good') {
-		    print "Saw a good one\n" if $verbose;
-		    $text2 =~ s/$sep/$rhs/;
-		} elsif ($gb eq 'bad') {
-		    print "Rejected a bad one\n" if $verbose;
-		    $text2 =~ s/$sep/$lhs/;
-		} else {
-		    die "Internal error: invalid value in good/bad array";
-		}
+	    sop_good_bad (\$text2, $lhs, $sep2, $sep1, $gb_list);
+	    if ($subsop && $subsop->{single}) {
+		&{$subsop->{single}}($subsop->{data}, $lhs, $sep2, $sep1, $gb_list);
 	    }
+	}
+    }
+    # Second pass substitution. Substitute the keys with identifiers.
+    for (0..$#subkeys) {
+	my $sep2 = make_sep (\@unusedchars, (2*($_+1)+1), $usedigits);
+	my $lhs = $subkeys[$_];
+	my $rhs = $rhsides->{$lhs};
+	$text2 =~ s/$sep2/$rhs/g;
+	if ($subsop && $subsop->{global}) {
+	    &{$subsop->{global}}($subsop->{data}, $sep2, $rhs)
 	}
     }
     return ($text2);
@@ -511,10 +559,9 @@ Ben Bullock, E<lt>benkasminbullock@gmail.com<gt>
 
 Copyright (C) 2008 by Ben Kasmin Bullock. 
 
-This library is free software; you can redistribute it and/or modify
-it under the same terms as Perl itself, either Perl version 5.10.0 or,
-at your option, any later version of Perl 5 you may have available.
-
+This module is distributed under the same terms as Perl itself, either
+Perl version 5.10.0 or, at your option, any later version of Perl 5
+you may have available.
 
 =cut
 

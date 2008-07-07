@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:                Regexp-Subst-NoRegex
-version:             0.01
+version:             0.02
 abstract:            emulate s/// using s/\Q// or substr
 license:             ~
 author:              
